@@ -4,3 +4,4 @@ dist/
 *.log
 .DS_Store
 server/data/
+RENDER-ENV.md
