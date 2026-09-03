@@ -267,9 +267,11 @@ export async function getPrices(rawSymbol, rawRange, now = Date.now()) {
         candles = await fetchYahoo(param, range);
         source = 'Yahoo Finance (live Forex)';
       } catch (err) {
-        const pair = label; // e.g. "EURUSD"
-        const from = pair.slice(0, 3);
-        const to = pair.slice(3, 6);
+        // Derive the fiat pair from the Yahoo ticker (e.g. "AUDUSD=X" -> "AUDUSD"),
+        // not from the display label (which may be a bare 3-letter code like "AUD").
+        const ticker = String(param).endsWith('=X') ? String(param).slice(0, 6) : String(param);
+        const from = ticker.slice(0, 3);
+        const to = ticker.slice(3, 6);
         candles = await fetchFrankfurter(from, to, range);
         providerUsed = 'frankfurter';
         source = 'Frankfurter (daily Forex fallback)';
