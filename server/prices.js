@@ -7,6 +7,11 @@
 // it's auto-routed to the right provider; "BTCUSDT"-style inputs go to Binance.
 const BINANCE_KLINE_URL = 'https://data-api.binance.vision/api/v3/klines';
 const YAHOO_CHART_URL = 'https://query1.finance.yahoo.com/v8/finance/chart';
+const FRANKFURTER_URL = 'https://api.frankfurter.app';
+
+// How many symbol->ISO dates to pull for the Frankfurter (daily) fallback.
+const FRANKFURTER_MAX_DAYS = 120;
+const FRANKFURTER_MIN_DAYS = 30;
 
 const BINANCE_RANGES = {
   '1m': { interval: '1m', limit: 60 },
@@ -141,6 +146,52 @@ async function fetchYahoo(param, range) {
   return candles;
 }
 
+// Free, no-key ECB fallback for forex when Yahoo Finance is rate-limited or
+// blocked on a hosting provider's datacenter IPs. Returns daily candles only.
+const FRANKFURTER_RANGE_DAYS = {
+  '1m': 30,
+  '1H': 30,
+  '24h': 30,
+  '7d': 60,
+  '30d': 120,
+};
+
+async function fetchFrankfurter(from, to, range) {
+  const days = FRANKFURTER_RANGE_DAYS[range] || FRANKFURTER_MIN_DAYS;
+  const end = new Date(Date.now());
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const url = `${FRANKFURTER_URL}/${iso(start)}..${iso(end)}?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) {
+    throw new Error(`Frankfurter responded ${res.status}`);
+  }
+  const body = await res.json();
+  const series = body?.rates;
+  if (!series) throw new Error('Frankfurter returned an unexpected shape');
+
+  const rates = Object.keys(series)
+    .sort()
+    .map((date) => ({ date, v: series[date][to] }))
+    .filter((r) => typeof r.v === 'number');
+
+  if (!rates.length) throw new Error('No daily rate data from fallback source.');
+
+  // Build OHLC candles. Without intraday ticks we only have a daily close, so
+  // open/high/low fall back to the close for a clean but coarse daily chart.
+  let candles = rates.map((r) => {
+    const t = new Date(`${r.date}T12:00:00Z`).getTime() / 1000;
+    return { time: t, open: r.v, high: r.v, low: r.v, close: r.v };
+  });
+
+  // Trim intraday ranges to something readable (we don't have intraday data).
+  if (range === '1m' || range === '1H' || range === '24h') {
+    candles = candles.slice(-FRANKFURTER_MIN_DAYS);
+  }
+  if (!candles.length) throw new Error('No price data for this symbol.');
+  return candles;
+}
+
 export async function getPrices(rawSymbol, rawRange, now = Date.now()) {
   const range = normalizeRange(rawRange);
   if (!rawSymbol) throw new Error('Missing symbol');
@@ -152,15 +203,34 @@ export async function getPrices(rawSymbol, rawRange, now = Date.now()) {
     return { ...cached.data, cached: true };
   }
 
-  const candles =
-    provider === 'yahoo'
-      ? await fetchYahoo(param, range)
-      : await fetchBinance(param, range);
+  let candles;
+  let source;
+  let providerUsed = provider;
+
+  if (provider === 'yahoo') {
+    // Yahoo first (live intraday). On hosts where Yahoo is rate-limited or
+    // blocked (e.g. datacenter IPs on Render), fall back to Frankfurter, a
+    // free, no-key, ECB-sourced provider that allows datacenter traffic.
+    try {
+      candles = await fetchYahoo(param, range);
+      source = 'Yahoo Finance (live Forex)';
+    } catch (err) {
+      const pair = label; // e.g. "EURUSD"
+      const from = pair.slice(0, 3);
+      const to = pair.slice(3, 6);
+      candles = await fetchFrankfurter(from, to, range);
+      providerUsed = 'frankfurter';
+      source = 'Frankfurter (daily Forex fallback)';
+    }
+  } else {
+    candles = await fetchBinance(param, range);
+    source = 'Binance (public market data)';
+  }
 
   const data = {
     symbol: label,
     range,
-    source: provider === 'yahoo' ? 'Yahoo Finance (live Forex)' : 'Binance (public market data)',
+    source,
     candles,
   };
   priceCache.set(key, { ttl: now + PRICE_CACHE_TTL_MS, data });
