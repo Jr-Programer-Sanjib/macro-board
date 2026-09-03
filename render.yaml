@@ -1,0 +1,45 @@
+# Render blueprint for the Macro Board backend.
+# Render imports render.yaml from the REPO ROOT. The backend lives in server/,
+# so every service sets rootDir: server.
+#
+# IMPORTANT (free tier):
+#   - Alerts only run while the process is alive. On Render's free plan the
+#     service spins down after ~15 min of inactivity and wakes on demand, so
+#     the alert scheduler will NOT fire 24/7 unless you add the cron-job
+#     keep-alive (see DEPLOY-CHECKLIST.md) or upgrade.
+#   - In-memory cache (calendar + prices) resets on each cold start.
+
+services:
+  - type: web
+    name: macro-board-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      # Port Render provides is in process.env.PORT. Express already reads it.
+      - key: DATABASE_TYPE
+        value: turso+supabase
+      - key: TURSO_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      # CORS: comma-separated list of allowed browser origins (your Vercel URL).
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Telegram alerts
+      - key: ALERTS_ENABLED
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      # Optional fallback data source (free tier: ~1 req/day)
+      - key: JBLANKED_API_KEY
+        sync: false
