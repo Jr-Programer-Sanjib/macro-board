@@ -1,0 +1,23 @@
+{
+  "name": "macro-board-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Backend for Macro Board — fetches the Forex Factory weekly calendar (with a JBlanked fallback), caches it, and serves it to the dashboard.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4",
+    "@supabase/supabase-js": "^2.113.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.23.0"
+  }
+}
