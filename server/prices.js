@@ -49,6 +49,27 @@ const CRYPTO = new Set([
   'MATIC', 'DOT', 'LINK', 'SHIB', 'AVAX', 'TRX', 'UNI', 'XLM', 'NEAR',
 ]);
 
+// Commodities / metals that can be charted. Yahoo futures are the live source;
+// when Yahoo is unavailable on a datacenter (Render), we fall back to a
+// Binance tokenized proxy for those that have one.
+const COMMODITY_YAHOO = {
+  XAU: 'GC=F',   // gold futures
+  GOLD: 'GC=F',
+  XAG: 'SI=F',   // silver futures
+  SILVER: 'SI=F',
+  XPT: 'PL=F',   // platinum futures
+  OIL: 'CL=F',   // WTI crude futures
+  WTI: 'CL=F',
+  BRENT: 'BZ=F', // Brent crude futures
+  NATGAS: 'NG=F',// natural gas futures
+  COPPER: 'HG=F',// copper futures
+};
+// Binance tokenized fallback for common metals (works from datacenter IPs).
+const COMMODITY_BINANCE = {
+  XAU: 'PAXGUSDT', // Pax Gold - tracks gold price
+  GOLD: 'PAXGUSDT',
+};
+
 const PRICE_CACHE_TTL_MS = Number(process.env.PRICE_CACHE_TTL_MS || 60_000);
 const priceCache = new Map(); // key: provider|param|range -> { ttl, data }
 
@@ -62,11 +83,23 @@ function normalizeRange(raw) {
 function resolve(symbol) {
   const s = String(symbol || '').trim().toUpperCase();
 
-  // Bare currency code -> forex via Yahoo or crypto via Binance.
+  // Bare currency code -> forex via Yahoo, commodity via Yahoo futures, or crypto via Binance.
   if (/^[A-Z]{3}$/.test(s)) {
     if (FX_YAHOO[s]) return { provider: 'yahoo', param: FX_YAHOO[s], label: s };
     if (CRYPTO.has(s)) return { provider: 'binance', param: `${s}USDT`, label: `${s}USDT` };
+    if (COMMODITY_YAHOO[s]) return { provider: 'yahoo', param: COMMODITY_YAHOO[s], label: s, commodity: s };
     throw new Error(`No chart source for the "${s}" currency yet — try a crypto pair like BTCUSDT.`);
+  }
+
+  // 4-letter commodity names (GOLD, WTI, etc.) -> Yahoo futures.
+  if (/^[A-Z]{4}$/.test(s) && COMMODITY_YAHOO[s]) {
+    return { provider: 'yahoo', param: COMMODITY_YAHOO[s], label: s, commodity: s };
+  }
+
+  // Commodity in XAUUSD / XAGUSD form -> still the metal, charted via futures.
+  const metalFrom6 = s.includes('XAU') || s.includes('GOLD') || s.includes('XAG') || s.includes('SILVER') || s.includes('OIL') || s.includes('CL=') ? s.slice(0, 3) : null;
+  if (metalFrom6 && COMMODITY_YAHOO[metalFrom6]) {
+    return { provider: 'yahoo', param: COMMODITY_YAHOO[metalFrom6], label: metalFrom6, commodity: metalFrom6 };
   }
 
   // Forex pair (EURUSD=X, USDJPY=X, or bare EURUSD/USDJPY form) -> Yahoo.
@@ -196,7 +229,7 @@ export async function getPrices(rawSymbol, rawRange, now = Date.now()) {
   const range = normalizeRange(rawRange);
   if (!rawSymbol) throw new Error('Missing symbol');
 
-  const { provider, param, label } = resolve(rawSymbol);
+  const { provider, param, label, commodity } = resolve(rawSymbol);
   const key = `${provider}|${param}|${range}`;
   const cached = priceCache.get(key);
   if (cached && now < cached.ttl) {
@@ -208,19 +241,39 @@ export async function getPrices(rawSymbol, rawRange, now = Date.now()) {
   let providerUsed = provider;
 
   if (provider === 'yahoo') {
-    // Yahoo first (live intraday). On hosts where Yahoo is rate-limited or
-    // blocked (e.g. datacenter IPs on Render), fall back to Frankfurter, a
-    // free, no-key, ECB-sourced provider that allows datacenter traffic.
-    try {
-      candles = await fetchYahoo(param, range);
-      source = 'Yahoo Finance (live Forex)';
-    } catch (err) {
-      const pair = label; // e.g. "EURUSD"
-      const from = pair.slice(0, 3);
-      const to = pair.slice(3, 6);
-      candles = await fetchFrankfurter(from, to, range);
-      providerUsed = 'frankfurter';
-      source = 'Frankfurter (daily Forex fallback)';
+    if (commodity) {
+      // Commodities: Yahoo futures first (live). On datacenter hosts where
+      // Yahoo is blocked/429, fall back to a Binance tokenized proxy for the
+      // metals that have one (gold only), else surface a clean error.
+      try {
+        candles = await fetchYahoo(param, range);
+        source = 'Yahoo Finance (live Futures)';
+      } catch (err) {
+        const token = COMMODITY_BINANCE[commodity];
+        if (token) {
+          candles = await fetchBinance(token, range);
+          providerUsed = 'binance';
+          source = `Binance tokenized (${token}) — Yahoo blocked`;
+        } else {
+          throw new Error(
+            `Yahoo Finance is blocked here (rate-limited) and there's no free fallback for ${commodity}. Gold works; silver/oil need Yahoo.`
+          );
+        }
+      }
+    } else {
+      // Fiat forex: Yahoo first (live intraday). On hosts where Yahoo is
+      // blocked/429, fall back to Frankfurter (free ECB daily data).
+      try {
+        candles = await fetchYahoo(param, range);
+        source = 'Yahoo Finance (live Forex)';
+      } catch (err) {
+        const pair = label; // e.g. "EURUSD"
+        const from = pair.slice(0, 3);
+        const to = pair.slice(3, 6);
+        candles = await fetchFrankfurter(from, to, range);
+        providerUsed = 'frankfurter';
+        source = 'Frankfurter (daily Forex fallback)';
+      }
     }
   } else {
     candles = await fetchBinance(param, range);
