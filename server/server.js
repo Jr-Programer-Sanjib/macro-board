@@ -377,8 +377,8 @@ app.post('/api/alerts/bot', async (req, res) => {
   }
 });
 
-app.listen(PORT, async () => {
-  console.log(`[macro-board] API listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', async () => {
+  console.log(`[macro-board] API listening on http://0.0.0.0:${PORT}`);
   if (!JBLANKED_API_KEY) {
     console.log('[macro-board] No JBLANKED_API_KEY set — fallback source is disabled.');
   }
