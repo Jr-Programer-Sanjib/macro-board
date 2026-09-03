@@ -190,9 +190,11 @@ async function persistEvents(events, source) {
 }
 
 async function refreshCache() {
-  // During a cooldown, don't touch the upstream at all — just serve what we
-  // have (fresh cache, stale cache, or stored history).
-  if (inBackoff()) {
+  // During a cooldown we normally stay quiet. But if a JBlanked API key is
+  // configured we keep trying it anyway — JBlanked has its own rate budget
+  // independent of Forex Factory, so a blocked Forex Factory must not force
+  // our live backup feed into cooldown too.
+  if (inBackoff() && !JBLANKED_API_KEY) {
     return serveFallback(
       'Upstream rate-limited; retrying after the cooldown period. Showing the most recent data we have.'
     );
@@ -214,7 +216,9 @@ async function refreshCache() {
       return { ...cache };
     } catch (jbErr) {
       console.warn('[macro-board] JBlanked fallback failed:', jbErr.message);
-      // Both sources failed — back off before hitting the upstream again.
+      // Both sources failed — back off before hitting the upstream again
+      // (only when we actually hit both; if no key was configured there was no
+      // second attempt, but staying in cooldown still protects the upstream).
       nextFetchAllowedAt = Date.now() + FF_BACKOFF_MS;
       const reason = `Both live sources failed (${ffErr.message}${JBLANKED_API_KEY ? `; ${jbErr.message}` : '; no JBlanked API key configured'}). Retrying in ${Math.round(FF_BACKOFF_MS / 60000)} min. Showing the most recent data we have.`;
       return serveFallback(reason);
