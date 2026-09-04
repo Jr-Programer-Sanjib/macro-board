@@ -23,6 +23,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
 
 const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
 const JBLANKED_URL = 'https://www.jblanked.com/news/api/forex-factory/calendar/week/';
+const BIQUOTE_URL = 'https://biquote.io/api/calendar';
 
 // ---------------------------------------------------------------------------
 // In-memory cache. There is only ONE underlying dataset (the current week);
@@ -141,6 +142,34 @@ async function fetchFromJBlanked() {
   return { events, source: 'JBlanked (mirrors Forex Factory)' };
 }
 
+// --- Biquote (free, keyless calendar fallback) -------------------------------
+// Free economic calendar API, no key required and datacenter friendly. Used as
+// a live backup when both Forex Factory and JBlanked are unavailable.
+async function fetchFromBiquote() {
+  const res = await fetch(BIQUOTE_URL, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Biquote responded ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const raw = await res.json();
+  if (!Array.isArray(raw)) throw new Error('Biquote returned an unexpected shape');
+
+  const events = raw.map((e) => ({
+    id: makeId([e.name, e.currency, e.time]),
+    time: e.time || new Date().toISOString(),
+    currency: e.currency || '—',
+    title: e.name || 'Untitled event',
+    impact: impactToLevel(e.importance),
+    forecast: cleanValue(e.forecast),
+    previous: cleanValue(e.previous),
+    actual: cleanValue(e.actual),
+  }));
+
+  return { events, source: 'Biquote (free calendar)' };
+}
+
 // --- Cache orchestration -----------------------------------------------------
 // Rate-limit backoff. Forex Factory allows ~2 requests / 5 min per IP and
 // returns an HTML "Request Denied" page (parsed as non-JSON) once you exceed
@@ -199,14 +228,22 @@ async function persistEvents(events, source) {
 }
 
 async function refreshCache() {
-  // During a cooldown we normally stay quiet. But if a JBlanked API key is
-  // configured we keep trying it anyway — JBlanked has its own rate budget
-  // independent of Forex Factory, so a blocked Forex Factory must not force
-  // our live backup feed into cooldown too.
+  // During a cooldown we still try our live backups — biquote is free and
+  // keyless (separate rate budget), and JBlanked has its own budget too. Only
+  // when we have NO backup at all do we stay quiet and serve cached data.
   if (inBackoff() && !JBLANKED_API_KEY) {
-    return serveFallback(
-      'Upstream rate-limited; retrying after the cooldown period. Showing the most recent data we have.'
-    );
+    // biquote is always available as a keyless backup, so it bypasses backoff.
+    try {
+      const result = await fetchFromBiquote();
+      cache = { ...result, fetchedAt: new Date(), stale: false, warning: null };
+      await persistEvents(cache.events, cache.source);
+      return { ...cache };
+    } catch (err) {
+      console.warn('[macro-board] Biquote fallback failed:', err.message);
+      return serveFallback(
+        'Upstream rate-limited; retrying after the cooldown period. Showing the most recent data we have.'
+      );
+    }
   }
 
   try {
@@ -217,20 +254,34 @@ async function refreshCache() {
     return { ...cache };
   } catch (ffErr) {
     console.warn('[macro-board] Forex Factory fetch failed:', ffErr.message);
+    // Biquote: free keyless live backup.
     try {
-      const result = await fetchFromJBlanked();
+      const result = await fetchFromBiquote();
       nextFetchAllowedAt = 0;
       cache = { ...result, fetchedAt: new Date(), stale: false, warning: null };
       await persistEvents(cache.events, cache.source);
       return { ...cache };
-    } catch (jbErr) {
-      console.warn('[macro-board] JBlanked fallback failed:', jbErr.message);
-      // Both sources failed — back off before hitting the upstream again
-      // (only when we actually hit both; if no key was configured there was no
-      // second attempt, but staying in cooldown still protects the upstream).
-      nextFetchAllowedAt = Date.now() + FF_BACKOFF_MS;
-      const reason = `Both live sources failed (${ffErr.message}${JBLANKED_API_KEY ? `; ${jbErr.message}` : '; no JBlanked API key configured'}). Retrying in ${Math.round(FF_BACKOFF_MS / 60000)} min. Showing the most recent data we have.`;
-      return serveFallback(reason);
+    } catch (bqErr) {
+      console.warn('[macro-board] Biquote fallback failed:', bqErr.message);
+      // JBlanked: only attempt if a key is configured (credits may still fail).
+      try {
+        const result = await fetchFromJBlanked();
+        nextFetchAllowedAt = 0;
+        cache = { ...result, fetchedAt: new Date(), stale: false, warning: null };
+        await persistEvents(cache.events, cache.source);
+        return { ...cache };
+      } catch (jbErr) {
+        console.warn('[macro-board] JBlanked fallback failed:', jbErr.message);
+        // All live sources failed — back off before hitting the upstream again.
+        nextFetchAllowedAt = Date.now() + FF_BACKOFF_MS;
+        const parts = [
+          `Forex Factory: ${ffErr.message}`,
+          `Biquote: ${bqErr.message}`,
+          JBLANKED_API_KEY ? `JBlanked: ${jbErr.message}` : 'no JBlanked API key configured',
+        ];
+        const reason = `All live sources failed (${parts.join('; ')}). Retrying in ${Math.round(FF_BACKOFF_MS / 60000)} min. Showing the most recent data we have.`;
+        return serveFallback(reason);
+      }
     }
   }
 }
