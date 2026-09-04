@@ -9,6 +9,15 @@ const POLL_MS = 60_000; // server-side cache makes this cheap
 const ALERTS_POLL_MS = Number(import.meta.env.VITE_ALERTS_POLL_MS || 30_000);
 const LEAD_OPTIONS = [5, 15, 30];
 
+// Only these currencies are shown & chartable: FX majors that the backend can
+// chart plus crypto coins. Everything else (INR, RUB, TRY, ...) is hidden from
+// the calendar.
+const SUPPORTED_CURRENCIES = new Set([
+  'AUD', 'CAD', 'CHF', 'CNY', 'EUR', 'GBP', 'JPY', 'NZD', 'TRY', 'ZAR',
+  'BTC', 'ETH', 'BNB', 'XRP', 'ADA', 'SOL', 'DOGE', 'LTC', 'BCH',
+  'MATIC', 'DOT', 'LINK', 'SHIB', 'AVAX', 'TRX', 'UNI', 'XLM', 'NEAR',
+]);
+
 // Settings hub sections. Adding a future feature = add one entry here.
 const SETTINGS_SECTIONS = [
   { id: 'bot', icon: '🤖', label: 'Telegram Bot', desc: 'Connect your own bot to receive alerts' },
@@ -216,11 +225,12 @@ export default function App() {
 
   const allCurrencies = useMemo(() => {
     const set = new Set(events.map((e) => e.currency));
-    return [...set].sort();
+    return [...set].filter((c) => SUPPORTED_CURRENCIES.has(c)).sort();
   }, [events]);
 
   const filteredEvents = useMemo(() => {
     return events
+      .filter((e) => SUPPORTED_CURRENCIES.has(e.currency))
       .filter((e) => IMPACT_LEVELS.includes(e.impact))
       .filter((e) => selectedImpacts.has(e.impact))
       .filter((e) => !excludedCurrencies.has(e.currency));
@@ -238,6 +248,7 @@ export default function App() {
 
   const nextHighImpact = useMemo(() => {
     const upcoming = events
+      .filter((e) => SUPPORTED_CURRENCIES.has(e.currency))
       .filter((e) => e.impact === 'high' && new Date(e.time).getTime() > now.getTime())
       .sort((a, b) => new Date(a.time) - new Date(b.time));
     return upcoming[0] || null;
