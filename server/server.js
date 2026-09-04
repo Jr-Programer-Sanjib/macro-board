@@ -90,6 +90,10 @@ async function fetchFromForexFactory() {
 }
 
 // --- JBlanked (fallback mirror) ---------------------------------------------
+// Track if JBlanked is permanently unavailable (e.g. 401 = no credits)
+// so we don't keep retrying every cache cycle.
+let jblankedPermanentlyFailed = false;
+
 function parseJBlankedDate(s) {
   // Format: "2024.02.08 15:30:00" — no explicit timezone in the docs example.
   // We treat it as-is (server-local interpretation). If your deployment is in
@@ -104,6 +108,7 @@ function parseJBlankedDate(s) {
 
 async function fetchFromJBlanked() {
   if (!JBLANKED_API_KEY) throw new Error('No JBLANKED_API_KEY configured');
+  if (jblankedPermanentlyFailed) throw new Error('JBlanked unavailable (no credits)');
 
   const res = await fetch(JBLANKED_URL, {
     headers: {
@@ -111,6 +116,10 @@ async function fetchFromJBlanked() {
       Authorization: `Api-Key ${JBLANKED_API_KEY}`,
     },
   });
+  if (res.status === 401 || res.status === 403) {
+    jblankedPermanentlyFailed = true;
+    throw new Error('JBlanked API key has no credits');
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`JBlanked responded ${res.status}: ${body.slice(0, 200)}`);

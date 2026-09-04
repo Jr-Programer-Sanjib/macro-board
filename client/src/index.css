@@ -608,16 +608,10 @@ a {
   color: var(--text);
 }
 
-.status-banner__hint {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-faint);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.status-banner__hint code {
-  color: var(--amber);
+.status-banner--info {
+  border-color: var(--amber);
+  color: var(--text-dim);
+  justify-content: center;
 }
 
 .empty-state {

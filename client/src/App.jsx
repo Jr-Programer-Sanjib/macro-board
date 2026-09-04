@@ -470,18 +470,9 @@ export default function App() {
         </aside>
 
         <main className="main">
-          {meta?.warning && (
-            <div className={`status-banner ${error ? 'status-banner--error' : ''}`}>
-              {meta.warning}
-              {meta.stale && (
-                <span className="status-banner__hint">
-                  Long outage? Add a free{' '}
-                  <a href="https://www.jblanked.com/api/key/" target="_blank" rel="noreferrer">
-                    JBlanked API key
-                  </a>{' '}
-                  (<code>JBLANKED_API_KEY</code> in <code>server/.env</code>) for a live backup feed.
-                </span>
-              )}
+          {meta?.warning && meta?.stale && (
+            <div className="status-banner status-banner--info">
+              Calendar showing recent cached data — refreshing shortly.
             </div>
           )}
           {error && !meta && (
